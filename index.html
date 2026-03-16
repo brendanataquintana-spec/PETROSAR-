@@ -245,6 +245,27 @@ function parseDeborCD(wb, estConfig) {
    ══════════════════════════════════════════════════════ */
 const GAS_URL_PLANTA="https://script.google.com/macros/s/AKfycbxi0XUb_Bj_09iqf6qxwMhKcfeKRBU7Ct_UeVPr0SnggHWfLOe-w_-_rhQh-9AakpMw/exec";
 const GAS_URL_BASECR="https://script.google.com/macros/s/AKfycbxMs9CQYLVS1GhAiU_RViaYksMMSNuUKfo0fzYr1qcwGHslZPdevD_zIqIdm2o2eAl6/exec";
+const GAS_URL_ESTACIONES="https://script.google.com/macros/s/AKfycbwOSxIfSPVAuXWKvPCm99TDwZh6AxnS_fDOhqxJZMFNxXgtN0sB35PRLFYguaq2gH6J/exec";
+
+// Mapa estación → código de solapa en el sheet
+const EST_SHEET_ID={
+  ANTICLINAL:"AG",
+  TRESPICOS:"TP",
+  RESERO:"RESERO",
+  VALLE:"VH",
+  ESTACIONCD:"CD",
+};
+
+// Fetch despachos de una estación desde Google Sheets
+async function fetchEstacion(estId){
+  const sheetId=EST_SHEET_ID[estId];
+  if(!sheetId) throw new Error("Estación no configurada: "+estId);
+  const res=await fetch(GAS_URL_ESTACIONES+"?action=getDespachos&estacion="+sheetId+"&nocache="+Date.now());
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  const data=await res.json();
+  if(data.error) throw new Error(data.error);
+  return data; // {porTanque, total, registros}
+}
 
 // Fetch Base CR — lee el último stock de columna H (índice 7)
 // El script devuelve A4:H200 → índice 7 = Stock acumulado con fórmula
@@ -440,7 +461,7 @@ function TankBar({nombre,stock,cap,color,idx=0,alarma=0}){
   return <TankGauge nombre={nombre} stock={stock} cap={cap} color={color} idx={idx} alarma={alarma}/>;
 }
 
-function EstacionCard({est,data,ingresos,stockInicial,onUpload,uploading,idx,plantaData,onSyncPlanta,plantaLoading,alarmas,baseCRData,onSyncBaseCR,baseCRLoading}){
+function EstacionCard({est,data,ingresos,stockInicial,onUpload,uploading,idx,plantaData,onSyncPlanta,plantaLoading,alarmas,baseCRData,onSyncBaseCR,baseCRLoading,onSyncEst,estLoading}){
   const cfg=ESTACIONES_CONFIG[est];
   const fileRef=useRef();
 
@@ -538,13 +559,20 @@ function EstacionCard({est,data,ingresos,stockInicial,onUpload,uploading,idx,pla
             </button>
             {baseCRData&&<div style={{fontSize:10,color:"#94a3b8",fontFamily:"'DM Mono'",whiteSpace:"nowrap"}}>{baseCRData.totalMovs} mov</div>}
           </>
+        ):EST_SHEET_ID[est]?(
+          <>
+            <button onClick={()=>onSyncEst(est)} disabled={estLoading?.[est]} style={{flex:1,background:`${cfg.color}10`,border:`1px solid ${cfg.color}44`,borderRadius:7,color:cfg.color,fontFamily:"'DM Mono'",fontSize:11,fontWeight:500,letterSpacing:1,padding:"8px 12px",cursor:"pointer",transition:"all .2s",textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",gap:6,opacity:estLoading?.[est]?.6:1}}>
+              {estLoading?.[est]?<span className="spin">⟳</span>:"↻"} Sincronizar Sheets
+            </button>
+            {data&&<div style={{fontSize:10,color:"#94a3b8",fontFamily:"'DM Mono'",whiteSpace:"nowrap"}}>{data.registros||data.despachos?.length||0} ops</div>}
+          </>
         ):(
           <>
             <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={e=>{if(e.target.files[0])onUpload(est,e.target.files[0]);e.target.value="";}}/>
             <button onClick={()=>fileRef.current.click()} style={{flex:1,background:`${cfg.color}10`,border:`1px solid ${cfg.color}44`,borderRadius:7,color:cfg.color,fontFamily:"'DM Mono'",fontSize:11,fontWeight:500,letterSpacing:1,padding:"8px 12px",cursor:"pointer",transition:"all .2s",textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
               {uploading?<span className="spin">⟳</span>:"↑"} {data?"Actualizar Excel":"Cargar Excel"}
             </button>
-            {data&&<div style={{fontSize:10,color:"#94a3b8",fontFamily:"'DM Mono'",whiteSpace:"nowrap"}}>{data.despachos.length} ops</div>}
+            {data&&<div style={{fontSize:10,color:"#94a3b8",fontFamily:"'DM Mono'",whiteSpace:"nowrap"}}>{data.despachos?.length||0} ops</div>}
           </>
         )}
       </div>
@@ -587,6 +615,7 @@ function App(){
   const [plantaLoading,setPlantaLoading]=useState(false);
   const [baseCRData,setBaseCRData]=useState(null);
   const [baseCRLoading,setBaseCRLoading]=useState(false);
+  const [estLoading,setEstLoading]=useState({});
   const [uploading,setUploading]=useState({});
   const [toast,setToast]=useState({msg:"",type:""});
   const [tab,setTab]=useState("dashboard");
@@ -639,6 +668,29 @@ function App(){
       .catch(()=>showToast("Sin conexión a Base CR","err",4000))
       .finally(()=>setBaseCRLoading(false));
   },[]);
+
+  // Cargar despachos de todas las estaciones desde Sheets al inicio
+  useEffect(()=>{
+    Object.keys(EST_SHEET_ID).forEach(estId=>{
+      setEstLoading(p=>({...p,[estId]:true}));
+      fetchEstacion(estId)
+        .then(d=>{ setDataPorEst(p=>({...p,[estId]:d})); })
+        .catch(()=>{}) // silencioso si falla
+        .finally(()=>setEstLoading(p=>({...p,[estId]:false})));
+    });
+  },[]);
+
+  // Sincronizar una estación manualmente
+  const handleSyncEst=(estId)=>{
+    setEstLoading(p=>({...p,[estId]:true}));
+    fetchEstacion(estId)
+      .then(d=>{
+        setDataPorEst(p=>({...p,[estId]:d}));
+        showToast(`✓ ${ESTACIONES_CONFIG[estId].nombre} actualizada`,"ok");
+      })
+      .catch(()=>showToast(`Error al sincronizar ${ESTACIONES_CONFIG[estId].nombre}`,"err",4000))
+      .finally(()=>setEstLoading(p=>({...p,[estId]:false})));
+  };
 
   const handleSyncBaseCR=()=>{
     setBaseCRLoading(true);
@@ -868,7 +920,7 @@ function App(){
             {/* Cards de estaciones */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))",gap:16}}>
               {Object.keys(ESTACIONES_CONFIG).map((estId,i)=>(
-                <EstacionCard key={estId} est={estId} data={estId==="PLANTAGRANEL"?plantaData:dataPorEst[estId]} ingresos={ingresos} stockInicial={stockInicial} onUpload={handleUpload} uploading={uploading[estId]} idx={i} plantaData={plantaData} onSyncPlanta={handleSyncPlanta} plantaLoading={plantaLoading} alarmas={alarmas} baseCRData={baseCRData} onSyncBaseCR={handleSyncBaseCR} baseCRLoading={baseCRLoading}/>
+                <EstacionCard key={estId} est={estId} data={estId==="PLANTAGRANEL"?plantaData:dataPorEst[estId]} ingresos={ingresos} stockInicial={stockInicial} onUpload={handleUpload} uploading={uploading[estId]} idx={i} plantaData={plantaData} onSyncPlanta={handleSyncPlanta} plantaLoading={plantaLoading} alarmas={alarmas} baseCRData={baseCRData} onSyncBaseCR={handleSyncBaseCR} baseCRLoading={baseCRLoading} onSyncEst={handleSyncEst} estLoading={estLoading}/>
               ))}
             </div>
 
