@@ -186,19 +186,24 @@ function parseCintelink(wb, estConfig) {
 function parseDebo(wb, estConfig) {
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, {header:1,defval:""});
-  // Headers en row 5 (idx 5), data from 6
+  // Headers en fila 6 (idx 5): Comprobante, Fecha, Cliente, Producto, Cantidad, Planilla, tk
+  // Datos desde fila 7 (idx 6)
   const despachos=[];
+  const porTanque={tk1:0,tk2:0};
   for(let i=6;i<rows.length;i++){
     const r=rows[i];
+    if(!r[0]) continue;
     const cant=parseFloat(r[4])||0;
-    const fecha=r[1];
-    if(cant>0 && fecha){
-      const fechaStr=fecha instanceof Date?fecha.toLocaleDateString("es-AR"):String(fecha);
-      despachos.push({fecha:fechaStr,hora:"",litros:cant,cara:1,operacion:String(r[0]||""),cliente:String(r[2]||""),producto:String(r[3]||"")});
-    }
+    if(cant<=0) continue;
+    const fecha=r[1] instanceof Date?r[1].toLocaleDateString("es-AR"):String(r[1]||"");
+    const comp=String(r[0]||"");
+    const producto=String(r[3]||"");
+    const tkNum=parseInt(r[6])||1;
+    const tkId=tkNum===2?"tk2":"tk1";
+    porTanque[tkId]=(porTanque[tkId]||0)+cant;
+    despachos.push({fecha,hora:"",litros:cant,cara:tkNum,operacion:comp,producto,cliente:"",patente:""});
   }
-  const total=despachos.reduce((a,d)=>a+d.litros,0);
-  return {despachos,porTanque:{tk1:total},total};
+  return {despachos,porTanque,total:despachos.reduce((a,d)=>a+d.litros,0)};
 }
 
 /* ══════════════════════════════════════════════════════
