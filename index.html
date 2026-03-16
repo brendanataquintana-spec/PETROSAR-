@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>⛽ Red de Estaciones — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:#f2f4f7;font-family:'DM Sans',sans-serif;color:#1e293b;min-height:100vh;overflow-x:hidden}
+
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:#e8eaf0}
+::-webkit-scrollbar-thumb{background:#c0c8d8;border-radius:3px}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes fillIn{from{width:0}to{width:var(--w)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.fu{animation:fadeUp .4s ease forwards;opacity:0}
+.spin{animation:spin 1s linear infinite;display:inline-block}
+
+input:focus,select:focus,button:focus{outline:2px solid #e87030;outline-offset:2px}
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+input[type=file]{display:none}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useMemo,useRef,useCallback,useEffect}=React;
+
+/* ══════════════════════════════════════════════════════
+   CONFIGURACIÓN DE ESTACIONES
+   ══════════════════════════════════════════════════════ */
+const ESTACIONES_CONFIG = {
+  "ANTICLINAL": {
+    id:"ANTICLINAL",
+    nombre:"Anticlinal Grande",
+    sistema:"DATACRAFT",
+    color:"#e87030",
+    colorDark:"#8c3508",
+    destinos:["ANTICLINAL GRANDE","ANTICLINAL","REMOTA AG","AG"],
+    tanques:[
+      {id:"tk1",nombre:"Gasoil Tk1",cap:20000,producto:"Gasoil",caras:[1]},
+      {id:"tk2",nombre:"Gasoil Tk2",cap:40000,producto:"Gasoil",caras:[2]},
+    ],
+    parse: parseDatacraft,
+  },
+  "TRESPICOS": {
+    id:"TRESPICOS",
+    nombre:"Tres Picos",
+    sistema:"DATACRAFT",
+    color:"#3a8fd4",
+    colorDark:"#1a4878",
+    destinos:["TRES PICOS","3 PICOS","TRESPICOS","3PICOS","REMOTA TP","TP"],
+    tanques:[
+      {id:"tk1",nombre:"Euro Tk1",cap:20000,producto:"Euro",caras:[1,3]},
+      {id:"tk2",nombre:"Euro Tk2",cap:20000,producto:"Euro",caras:[2]},
+      {id:"tk3",nombre:"Euro Tk3",cap:20000,producto:"Euro",caras:[4]},
+    ],
+    parse: parseDatacraft,
+  },
+  "RESERO": {
+    id:"RESERO",
+    nombre:"Resero",
+    sistema:"CINTELINK",
+    color:"#2aaa6a",
+    colorDark:"#155530",
+    destinos:["RESERO"],
+    tanques:[
+      {id:"tk1",nombre:"Euro Tk1",cap:50000,producto:"Euro",caras:[1]},
+    ],
+    parse: parseCintelink,
+  },
+  "VALLE": {
+    id:"VALLE",
+    nombre:"Valle Hermoso",
+    sistema:"DEBO",
+    color:"#a060e0",
+    colorDark:"#4a2080",
+    destinos:["REMOTA VH","VALLE HERMOSO","VALLE","VH"],
+    tanques:[
+      {id:"tk1",nombre:"Euro Tk1",cap:60000,producto:"Euro",caras:[1]},
+      {id:"tk2",nombre:"Euro Tk2",cap:60000,producto:"Euro",caras:[2]},
+    ],
+    parse: parseDebo,
+  },
+  "BASECR": {
+    id:"BASECR",
+    nombre:"Base CR",
+    sistema:"SHEETS",
+    color:"#0a9888",
+    colorDark:"#054850",
+    destinos:["BASE CR"],
+    tanques:[
+      {id:"tk1",nombre:"Euro Tk1",cap:100000,producto:"Euro",caras:[1]},
+    ],
+    parse: null,
+  },
+  "PLANTAGRANEL": {
+    id:"PLANTAGRANEL",
+    nombre:"Planta Granel",
+    sistema:"SHEETS",
+    color:"#e8a020",
+    colorDark:"#7a4a00",
+    destinos:["PLANTA GRANEL","PLANTA"],
+    tanques:[
+      {id:"tk1",nombre:"Gasoil Tk1",cap:100000,caras:[1]},
+      {id:"tk2",nombre:"Euro Tk2",cap:100000,caras:[2]},
+      {id:"tk3",nombre:"Euro Tk3",cap:100000,caras:[3]},
+    ],
+    parse: null, // stock desde Google Sheets
+  },
+  "ESTACIONCD": {
+    id:"ESTACIONCD",
+    nombre:"Estación CD",
+    sistema:"DEBO",
+    color:"#20c0a0",
+    colorDark:"#0a5040",
+    destinos:["ESTACION CD","EST CD","CD"],
+    tanques:[
+      {id:"tk1",nombre:"Euro Tk1",cap:20000,producto:"Euro",caras:[1]},
+      {id:"tk2",nombre:"Euro Tk2",cap:20000,producto:"Euro",caras:[2]},
+      {id:"tk3",nombre:"Gasoil Tk3",cap:20000,producto:"Gasoil",caras:[3,4]},
+    ],
+    parse: parseDeborCD,
+  },
+};
+
+/* ══════════════════════════════════════════════════════
+   PARSERS POR SISTEMA
+   ══════════════════════════════════════════════════════ */
+function parseDatacraft(wb, estConfig) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1,defval:""});
+  // Row 0 = headers, data from row 1
+  const despachos = [];
+  for(let i=1;i<rows.length;i++){
+    const r = rows[i];
+    const litros = parseFloat(r[2])||0;
+    const fecha  = String(r[19]||"");
+    const hora   = String(r[20]||"");
+    const cara   = parseInt(r[22])||1;
+    if(litros>0){
+      despachos.push({fecha,hora,litros,cara,operacion:String(r[0]||""),producto:String(r[3]||""),patente:String(r[5]||""),chofer:String(r[14]||""),cliente:String(r[17]||"")});
+    }
+  }
+  // Map cara → tanque
+  const porTanque = {};
+  estConfig.tanques.forEach(tk=>{ porTanque[tk.id]=0; });
+  despachos.forEach(d=>{
+    const tk = estConfig.tanques.find(t=>t.caras.includes(d.cara));
+    if(tk) porTanque[tk.id]=(porTanque[tk.id]||0)+d.litros;
+  });
+  return {despachos, porTanque, total:despachos.reduce((a,d)=>a+d.litros,0)};
+}
+
+function parseCintelink(wb, estConfig) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1,defval:""});
+  // Headers en fila 14 (idx 14), datos desde 15
+  const despachos = [];
+  let headerRow = -1;
+  for(let i=0;i<rows.length;i++){
+    if(rows[i].some(c=>String(c).includes("Transacci"))){headerRow=i;break;}
+  }
+  if(headerRow<0) return {despachos:[],porTanque:{tk1:0},total:0};
+  for(let i=headerRow+1;i<rows.length;i++){
+    const r=rows[i];
+    // B=idx1 txn, C=idx2 fecha, D=idx3 hora, R=idx17 cantidad, P=idx15 tanque
+    const cant = parseFloat(r[17])||0;
+    if(cant>0){
+      despachos.push({fecha:String(r[2]||""),hora:String(r[3]||""),litros:cant,cara:parseInt(r[15])||1,operacion:String(r[1]||""),chofer:String(r[10]||""),patente:String(r[40]||"")});
+    }
+  }
+  const porTanque={tk1:despachos.reduce((a,d)=>a+d.litros,0)};
+  return {despachos,porTanque,total:despachos.reduce((a,d)=>a+d.litros,0)};
+}
+
+function parseDebo(wb, estConfig) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1,defval:""});
+  // Headers en row 5 (idx 5), data from 6
+  const despachos=[];
+  for(let i=6;i<rows.length;i++){
+    const r=rows[i];
+    const cant=parseFloat(r[4])||0;
+    const fecha=r[1];
+    if(cant>0 && fecha){
+      const fechaStr=fecha instanceof Date?fecha.toLocaleDateString("es-AR"):String(fecha);
+      despachos.push({fecha:fechaStr,hora:"",litros:cant,cara:1,operacion:String(r[0]||""),cliente:String(r[2]||""),producto:String(r[3]||"")});
+    }
+  }
+  const total=despachos.reduce((a,d)=>a+d.litros,0);
+  return {despachos,porTanque:{tk1:total},total};
+}
+
+/* ══════════════════════════════════════════════════════
+   PARSER ESTACIÓN CD (DEBO con Pump ID)
+   Fila 1 = headers, datos desde fila 2
+   Col A=Comprobante, B=Hora, C=Litros, D=Producto, E=Cliente, F=Pump ID
+   Tk1=PumpID 1 (EURO_DIESEL_BIO), Tk2=PumpID 2 (EURO_DIESEL_BIO), Tk3(Gasoil)=PumpID 3 y 4
+   Columnas: 0=sale_id, 1=end_date, 2=end_time, 3=pump_id, 5=producto(id), 6=volume
+   ══════════════════════════════════════════════════════ */
+function parseDeborCD(wb, estConfig) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+  const despachos = [];
+  const porTanque = {tk1:0, tk2:0, tk3:0};
+  // Fila 0 = headers, datos desde fila 1
+  for(let i=1; i<rows.length; i++){
+    const r = rows[i];
+    const litros = parseFloat(r[6])||0;   // col 6 = volume
+    if(litros <= 0) continue;
+    const pumpId  = parseInt(r[3])||0;    // col 3 = pump_id
+    const fecha   = String(r[1]||"");     // col 1 = end_date
+    const hora    = String(r[2]||"");     // col 2 = end_time
+    const producto= String(r[5]||"");     // col 5 = id (producto)
+    const comp    = String(r[0]||"");     // col 0 = sale_id
+    let tkId = null;
+    if(pumpId === 1)               tkId = "tk1";
+    else if(pumpId === 2)          tkId = "tk2";
+    else if(pumpId === 3 || pumpId === 4) tkId = "tk3";
+    if(tkId){
+      porTanque[tkId] = (porTanque[tkId]||0) + litros;
+      despachos.push({fecha, hora, litros, cara:pumpId, operacion:comp, producto, cliente:"", patente:""});
+    }
+  }
+  return {despachos, porTanque, total:despachos.reduce((a,d)=>a+d.litros,0)};
+}
+
+/* ══════════════════════════════════════════════════════
+   PLANTA GRANEL — GOOGLE SHEETS
+   ══════════════════════════════════════════════════════ */
+const GAS_URL_PLANTA="https://script.google.com/macros/s/AKfycbxi0XUb_Bj_09iqf6qxwMhKcfeKRBU7Ct_UeVPr0SnggHWfLOe-w_-_rhQh-9AakpMw/exec";
+const GAS_URL_BASECR="https://script.google.com/macros/s/AKfycbxMs9CQYLVS1GhAiU_RViaYksMMSNuUKfo0fzYr1qcwGHslZPdevD_zIqIdm2o2eAl6/exec";
+
+// Fetch Base CR — lee el último stock de columna H (índice 7)
+// El script devuelve A4:H200 → índice 7 = Stock acumulado con fórmula
+async function fetchBaseCR(){
+  const res=await fetch(GAS_URL_BASECR+"?action=getAll&nocache="+Date.now());
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  const rows=await res.json();
+  // Buscar último valor válido en columna H (índice 7)
+  let stockVivo=0;
+  for(let i=rows.length-1;i>=0;i--){
+    const h=parseFloat(rows[i]?.[7]);
+    if(!isNaN(h) && h>0){ stockVivo=h; break; }
+  }
+  const totalMovs=rows.filter(r=>r&&r[0]).length;
+  return {stockVivo, totalMovs};
+}
+
+// Helpers para comunicarse con el Apps Script de Planta
+async function gasGet(action){
+  const res=await fetch(GAS_URL_PLANTA+"?action="+action+"&nocache="+Date.now());
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  return res.json();
+}
+async function gasPost(payload){
+  await fetch(GAS_URL_PLANTA,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(payload)});
+}
+
+async function fetchPlantaGranel(stockInicial){
+  const res=await fetch(GAS_URL_PLANTA+"?action=getAll&nocache="+Date.now());
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  const rows=await res.json();
+
+  const initTk1=(stockInicial?.PLANTAGRANEL?.tk1)||0;
+  const initTk2=(stockInicial?.PLANTAGRANEL?.tk2)||0;
+  const initTk3=(stockInicial?.PLANTAGRANEL?.tk3)||0;
+  let tk1=initTk1, tk2=initTk2, tk3=initTk3;
+  const despachos=[];
+
+  // Ingresos automáticos a cada estación detectados desde los despachos de Planta
+  // estacion → tanque → litros acumulados
+  const ingresosAutoEst={};
+
+  rows.forEach(row=>{
+    if(!row||!row[0]) return;
+    const ref=String(row[2]||"").toUpperCase();
+    // Sheet: col10=Factura, col11=Gasoil Tk1, col12=Euro Tk2, col13=Euro Tk3
+    const v1=parseFloat(row[11])||0;
+    const v2=parseFloat(row[12])||0;
+    const v3=parseFloat(row[13])||0;
+    const total=v1+v2+v3;
+    const esIngreso=["RTO","FAC"].includes(ref);
+    const receptor=String(row[6]||"").toUpperCase();
+    const destino=String(row[7]||"").toUpperCase();
+    const fecha=String(row[1]||"");
+
+    if(esIngreso){ tk1+=v1; tk2+=v2; tk3+=v3; }
+    else {
+      tk1-=v1; tk2-=v2; tk3-=v3;
+      // Detectar a qué estación fue el despacho y acumularlo como ingreso
+      if(total>0){
+        const textoDestino=receptor+" "+destino;
+        // row[18] = distribucion JSON {"tk1":5000,"tk2":5000} o vacío
+        let distribucion=null;
+        try{ const raw=String(row[18]||""); if(raw.startsWith("{"))distribucion=JSON.parse(raw); }catch(e){}
+        Object.entries(ESTACIONES_CONFIG).forEach(([estId,cfg])=>{
+          if(estId==="PLANTAGRANEL") return;
+          const match=cfg.destinos.some(d=>textoDestino.includes(d.toUpperCase()));
+          if(match){
+            if(!ingresosAutoEst[estId]) ingresosAutoEst[estId]={};
+            if(distribucion){
+              // Distribuir por tanque según JSON guardado
+              Object.entries(distribucion).forEach(([tkId,lts])=>{
+                const tkValido=cfg.tanques.find(t=>t.id===tkId);
+                if(tkValido&&lts>0){
+                  ingresosAutoEst[estId][tkId]=(ingresosAutoEst[estId][tkId]||0)+(parseFloat(lts)||0);
+                }
+              });
+            } else {
+              // Sin distribución: todo al primer tanque
+              const tkDest=cfg.tanques[0].id;
+              ingresosAutoEst[estId][tkDest]=(ingresosAutoEst[estId][tkDest]||0)+total;
+            }
+          }
+        });
+      }
+    }
+
+    if(total>0){
+      despachos.push({fecha,litros:total,cara:1,operacion:String(row[3]||""),receptor:String(row[6]||""),destino:String(row[7]||""),ref});
+    }
+  });
+
+  // Convertir ingresosAutoEst a formato de ingresos para la app
+  const ingresosAuto=[];
+  Object.entries(ingresosAutoEst).forEach(([estId,tanques])=>{
+    Object.entries(tanques).forEach(([tkId,litros])=>{
+      if(litros>0){
+        ingresosAuto.push({
+          id:"auto_"+estId+"_"+tkId,
+          estacion:estId,
+          tanque:tkId,
+          litros,
+          fecha:"auto",
+          obs:"Automático desde Planta Granel",
+          auto:true,
+        });
+      }
+    });
+  });
+
+  return {
+    stockVivo:{tk1:Math.max(0,tk1),tk2:Math.max(0,tk2),tk3:Math.max(0,tk3)},
+    despachos,
+    porTanque:{tk1:0,tk2:0,tk3:0},
+    total:despachos.filter(d=>!["RTO","FAC"].includes(d.ref)).reduce((a,d)=>a+d.litros,0),
+    ingresosAuto,
+  };
+}
+
+/* ══════════════════════════════════════════════════════
+   HELPERS
+   ══════════════════════════════════════════════════════ */
+const fmt  = n=>Math.round(n||0).toLocaleString("es-AR");
+const fmtD = n=>(n||0).toFixed(1);
+
+/* ══════════════════════════════════════════════════════
+   COMPONENTES UI
+   ══════════════════════════════════════════════════════ */
+
+function TankGauge({nombre,stock,cap,color,idx=0,alarma=0}){
+  const pct=cap>0?Math.min(100,Math.max(0,(stock/cap)*100)):0;
+  const enAlarma=alarma>0&&stock<=alarma;
+  const lvlColor=enAlarma?"#e03030":pct>60?color:pct>25?"#d49010":"#e03030";
+  const W=110,H=130;
+  const cx=W/2,cy=52,r=42;
+  const fillH=r*2*(pct/100);
+  const fillY=cy+r-fillH;
+  const waveAmp=3;
+  const wave=pct>1&&pct<99
+    ?`M${cx-r-2},${fillY} Q${cx-r/2},${fillY-waveAmp} ${cx},${fillY} Q${cx+r/2},${fillY+waveAmp} ${cx+r+2},${fillY} L${cx+r+2},${cy+r+2} L${cx-r-2},${cy+r+2} Z`
+    :pct<=1?null
+    :`M${cx-r-2},${cy-r-2} L${cx+r+2},${cy-r-2} L${cx+r+2},${cy+r+2} L${cx-r-2},${cy+r+2} Z`;
+  const clipId=`ck-${idx}-${nombre.replace(/\s/g,"")}`;
+  // litros display
+  const litrosLabel=stock>=1000?(stock/1000).toFixed(1)+"k":fmt(stock);
+  return(
+    <div className="fu" style={{animationDelay:`${idx*0.1}s`,display:"flex",flexDirection:"column",alignItems:"center",gap:5,
+      background:"#fff",borderRadius:14,padding:"12px 10px 10px",
+      border:`1.5px solid ${enAlarma?"#fca5a5":pct>60?"#e2e8f0":pct>25?"#fde68a44":"#fca5a5"}`,
+      boxShadow:enAlarma?"0 0 0 2px #fee2e2":"0 1px 6px rgba(0,0,0,.07)",
+      minWidth:100,
+    }}>
+      <svg width={W} height={cy*2+4} viewBox={`0 0 ${W} ${cy*2+4}`} style={{overflow:"visible",display:"block"}}>
+        <defs>
+          <clipPath id={clipId}>
+            <circle cx={cx} cy={cy} r={r}/>
+          </clipPath>
+        </defs>
+        {/* background circle */}
+        <circle cx={cx} cy={cy} r={r} fill="#f1f5f9"/>
+        {/* liquid */}
+        <g clipPath={`url(#${clipId})`}>
+          {wave&&<>
+            <rect x={cx-r-2} y={fillY} width={(r+2)*2} height={fillH+4} fill={`${lvlColor}22`}/>
+            <path d={wave} fill={`${lvlColor}40`}/>
+          </>}
+        </g>
+        {/* border ring */}
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke={lvlColor} strokeWidth="2.5" opacity="0.7"/>
+        {/* litros grandes */}
+        <text x={cx} y={cy-2} textAnchor="middle" fill={lvlColor}
+          style={{fontFamily:"'Bebas Neue'",fontSize:22,fontWeight:700}}>
+          {litrosLabel}
+        </text>
+        <text x={cx} y={cy+13} textAnchor="middle" fill={lvlColor} opacity="0.75"
+          style={{fontFamily:"'DM Mono'",fontSize:9}}>L</text>
+        <text x={cx} y={cy+25} textAnchor="middle" fill="#94a3b8"
+          style={{fontFamily:"'DM Mono'",fontSize:8}}>
+          {Math.round(pct)}%
+        </text>
+      </svg>
+      {/* label */}
+      <div style={{textAlign:"center",marginTop:2}}>
+        <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#64748b",letterSpacing:1,textTransform:"uppercase"}}>{nombre}</div>
+        <div style={{fontFamily:"'DM Mono'",fontSize:8,color:"#cbd5e1",marginTop:1}}>cap {(cap/1000).toFixed(0)}k L</div>
+      </div>
+      {enAlarma&&<div style={{fontSize:9,color:"#e03030",fontWeight:700,fontFamily:"'DM Mono'",letterSpacing:1}}>⚠ ALARMA</div>}
+    </div>
+  );
+}
+
+function TankBar({nombre,stock,cap,color,idx=0,alarma=0}){
+  return <TankGauge nombre={nombre} stock={stock} cap={cap} color={color} idx={idx} alarma={alarma}/>;
+}
+
+function EstacionCard({est,data,ingresos,stockInicial,onUpload,uploading,idx,plantaData,onSyncPlanta,plantaLoading,alarmas,baseCRData,onSyncBaseCR,baseCRLoading}){
+  const cfg=ESTACIONES_CONFIG[est];
+  const fileRef=useRef();
+
+  const stocks=useMemo(()=>{
+    if(est==="PLANTAGRANEL" && plantaData?.stockVivo) return plantaData.stockVivo;
+    if(est==="BASECR" && baseCRData?.stockVivo>0) return {tk1:baseCRData.stockVivo};
+    const s={};
+    cfg.tanques.forEach(tk=>{
+      const base=(stockInicial?.[est]?.[tk.id])||0;
+      const ingTotal=ingresos.filter(ing=>ing.estacion===est&&ing.tanque===tk.id).reduce((a,b)=>a+b.litros,0);
+      const despTotal=(data?.porTanque?.[tk.id])||0;
+      s[tk.id]=Math.max(0,base+ingTotal-despTotal);
+    });
+    return s;
+  },[data,ingresos,est,cfg,stockInicial,plantaData,baseCRData]);
+
+  const totalStock=Object.values(stocks).reduce((a,b)=>a+b,0);
+  const totalCap=cfg.tanques.reduce((a,tk)=>a+tk.cap,0);
+  const pctTotal=totalCap>0?Math.min(100,(totalStock/totalCap)*100):0;
+  const totalDesp=(data?.total)||0;
+
+  // Consumo diario estimado
+  const dias=data?.despachos?.length>0?10:1;
+  const consumoDiario=totalDesp/dias;
+
+  // Días de autonomía
+  const autonomia=consumoDiario>0?Math.floor(totalStock/consumoDiario):999;
+
+  return(
+    <div className="fu" style={{
+      animationDelay:`${idx*0.12}s`,
+      background:"#ffffff",
+      border:`1.5px solid ${cfg.color}44`,
+      borderRadius:16,
+      overflow:"hidden",
+      position:"relative",
+      boxShadow:`0 2px 16px rgba(0,0,0,.07)`,
+    }}>
+      {/* top accent bar */}
+      <div style={{height:4,background:`linear-gradient(90deg,${cfg.color},${cfg.color}66)`}}/>
+
+      {/* header */}
+      <div style={{padding:"16px 20px 12px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
+        <div>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+            <div style={{width:8,height:8,borderRadius:"50%",background:cfg.color,animation:pctTotal<25?"pulse 1.5s infinite":"none"}}/>
+            <span style={{fontFamily:"'Bebas Neue'",fontSize:22,letterSpacing:2,color:"#1e293b"}}>{cfg.nombre}</span>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <span style={{background:`${cfg.color}18`,color:cfg.color,fontSize:10,fontWeight:600,padding:"2px 8px",borderRadius:3,fontFamily:"'DM Mono'",letterSpacing:1}}>{cfg.sistema}</span>
+            <span style={{fontSize:11,color:"#94a3b8"}}>{cfg.tanques.length} tanque{cfg.tanques.length>1?"s":""} · {fmt(totalCap)} L cap.</span>
+          </div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontFamily:"'Bebas Neue'",fontSize:30,color:pctTotal>60?cfg.color:pctTotal>25?"#d49010":"#e03030",lineHeight:1}}>{fmt(totalStock)}<span style={{fontSize:13,opacity:.5,marginLeft:3}}>L</span></div>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{pctTotal.toFixed(0)}% capacidad</div>
+        </div>
+      </div>
+
+      {/* tanks */}
+      <div style={{padding:"16px 20px",display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+        {cfg.tanques.map((tk,i)=>(
+          <TankBar key={tk.id} nombre={tk.nombre} stock={stocks[tk.id]||0} cap={tk.cap} color={cfg.color} idx={i} alarma={alarmas?.[est]?.[tk.id]||0}/>
+        ))}
+      </div>
+
+      {/* stats */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:1,borderTop:"1px solid #f1f5f9",background:"#f8fafc"}}>
+        {[
+          ["DESPACHOS",fmt(totalDesp)+" L","período"],
+          ["CONSUMO/DÍA",fmt(consumoDiario)+" L","estimado"],
+          ["AUTONOMÍA",autonomia>90?"90+ d":autonomia+" d","aprox"],
+        ].map(([label,val,sub])=>(
+          <div key={label} style={{background:"#fff",padding:"10px 14px",textAlign:"center",border:"1px solid #f1f5f9"}}>
+            <div style={{fontSize:9,color:"#94a3b8",letterSpacing:1.5,textTransform:"uppercase",fontFamily:"'DM Mono'"}}>{label}</div>
+            <div style={{fontFamily:"'DM Mono'",fontSize:13,fontWeight:500,color:"#334155",marginTop:3}}>{val}</div>
+            <div style={{fontSize:9,color:"#cbd5e1"}}>{sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* upload / sincronizar */}
+      <div style={{padding:"12px 20px",borderTop:"1px solid #f1f5f9",display:"flex",gap:8,alignItems:"center",background:"#fff"}}>
+        {est==="PLANTAGRANEL"?(
+          <>
+            <button onClick={onSyncPlanta} disabled={plantaLoading} style={{flex:1,background:`${cfg.color}10`,border:`1px solid ${cfg.color}44`,borderRadius:7,color:cfg.color,fontFamily:"'DM Mono'",fontSize:11,fontWeight:500,letterSpacing:1,padding:"8px 12px",cursor:"pointer",transition:"all .2s",textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",gap:6,opacity:plantaLoading?.6:1}}>
+              {plantaLoading?<span className="spin">⟳</span>:"↻"} Sincronizar Sheets
+            </button>
+            {plantaData&&<div style={{fontSize:10,color:"#94a3b8",fontFamily:"'DM Mono'",whiteSpace:"nowrap"}}>{plantaData.despachos.length} mov</div>}
+          </>
+        ):est==="BASECR"?(
+          <>
+            <button onClick={onSyncBaseCR} disabled={baseCRLoading} style={{flex:1,background:`${cfg.color}10`,border:`1px solid ${cfg.color}44`,borderRadius:7,color:cfg.color,fontFamily:"'DM Mono'",fontSize:11,fontWeight:500,letterSpacing:1,padding:"8px 12px",cursor:"pointer",transition:"all .2s",textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",gap:6,opacity:baseCRLoading?.6:1}}>
+              {baseCRLoading?<span className="spin">⟳</span>:"↻"} Sincronizar Sheets
+            </button>
+            {baseCRData&&<div style={{fontSize:10,color:"#94a3b8",fontFamily:"'DM Mono'",whiteSpace:"nowrap"}}>{baseCRData.totalMovs} mov</div>}
+          </>
+        ):(
+          <>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={e=>{if(e.target.files[0])onUpload(est,e.target.files[0]);e.target.value="";}}/>
+            <button onClick={()=>fileRef.current.click()} style={{flex:1,background:`${cfg.color}10`,border:`1px solid ${cfg.color}44`,borderRadius:7,color:cfg.color,fontFamily:"'DM Mono'",fontSize:11,fontWeight:500,letterSpacing:1,padding:"8px 12px",cursor:"pointer",transition:"all .2s",textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+              {uploading?<span className="spin">⟳</span>:"↑"} {data?"Actualizar Excel":"Cargar Excel"}
+            </button>
+            {data&&<div style={{fontSize:10,color:"#94a3b8",fontFamily:"'DM Mono'",whiteSpace:"nowrap"}}>{data.despachos.length} ops</div>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DonutGauge({value,max,color,size=120}){
+  const r=48,circ=2*Math.PI*r;
+  const pct=max>0?Math.min(1,value/max):0;
+  const dash=pct*circ;
+  return(
+    <svg width={size} height={size} viewBox="0 0 120 120">
+      <circle cx={60} cy={60} r={r} fill="none" stroke="#e2e8f0" strokeWidth={10}/>
+      <circle cx={60} cy={60} r={r} fill="none" stroke={color} strokeWidth={10}
+        strokeLinecap="round" strokeDasharray={`${dash} ${circ}`}
+        transform="rotate(-90 60 60)"
+        style={{transition:"stroke-dasharray .8s cubic-bezier(.4,0,.2,1)",filter:`drop-shadow(0 0 6px ${color}88)`}}/>
+    </svg>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   APP PRINCIPAL
+   ══════════════════════════════════════════════════════ */
+function App(){
+  const [dataPorEst,setDataPorEst]=useState({});
+  const [ingresos,setIngresos]=useState([]);
+  const [alarmas,setAlarmas]=useState({});
+  const [stockInicial,setStockInicial]=useState({
+    ANTICLINAL:{tk1:0,tk2:0},
+    TRESPICOS:{tk1:0,tk2:0,tk3:0},
+    RESERO:{tk1:0},
+    VALLE:{tk1:0},
+    PLANTAGRANEL:{tk1:26000,tk2:24000,tk3:8100},
+    ESTACIONCD:{tk1:0,tk2:0,tk3:0},
+  });
+  const [plantaData,setPlantaData]=useState(null);
+  const [plantaLoading,setPlantaLoading]=useState(false);
+  const [baseCRData,setBaseCRData]=useState(null);
+  const [baseCRLoading,setBaseCRLoading]=useState(false);
+  const [uploading,setUploading]=useState({});
+  const [toast,setToast]=useState({msg:"",type:""});
+  const [tab,setTab]=useState("dashboard");
+  const [modalIngreso,setModalIngreso]=useState(false);
+  const [formIng,setFormIng]=useState({estacion:"ANTICLINAL",tanque:"tk1",litros:"",fecha:new Date().toISOString().slice(0,10),obs:""});
+  const [detalleEst,setDetalleEst]=useState(null);
+
+  const showToast=(msg,type="ok",ms=3000)=>{setToast({msg,type});setTimeout(()=>setToast({msg:"",type:""}),ms);};
+
+  // Cargar config de estaciones desde Sheets al inicio
+  useEffect(()=>{
+    gasGet("getEstConfig")
+      .then(cfg=>{
+        if(cfg && cfg.stockInicial && Object.keys(cfg.stockInicial).length>0){
+          setStockInicial(p=>({...p,...cfg.stockInicial}));
+          showToast("✓ Config de estaciones cargada","ok");
+        }
+        if(cfg && cfg.alarmas) setAlarmas(cfg.alarmas);
+      })
+      .catch(()=>{}); // silencioso si falla
+  },[]);
+
+  // Guardar config automáticamente cuando cambia stockInicial o alarmas
+  const saveEstConfigTimer=React.useRef(null);
+  useEffect(()=>{
+    clearTimeout(saveEstConfigTimer.current);
+    saveEstConfigTimer.current=setTimeout(()=>{
+      gasPost({action:"saveEstConfig",stockInicial,alarmas}).catch(()=>{});
+    },1500); // espera 1.5s después del último cambio
+  },[stockInicial,alarmas]);
+
+  // Cargar Planta Granel al inicio
+  useEffect(()=>{
+    setPlantaLoading(true);
+    fetchPlantaGranel(stockInicial)
+      .then(d=>{
+        setPlantaData(d);
+        setIngresos(prev=>[...prev.filter(i=>!i.auto),...(d.ingresosAuto||[])]);
+        showToast("✓ Planta Granel sincronizada","ok");
+      })
+      .catch(()=>showToast("Sin conexión a Planta Granel","err",4000))
+      .finally(()=>setPlantaLoading(false));
+  },[]);
+
+  // Cargar Base CR al inicio
+  useEffect(()=>{
+    setBaseCRLoading(true);
+    fetchBaseCR()
+      .then(d=>{ setBaseCRData(d); })
+      .catch(()=>showToast("Sin conexión a Base CR","err",4000))
+      .finally(()=>setBaseCRLoading(false));
+  },[]);
+
+  const handleSyncBaseCR=()=>{
+    setBaseCRLoading(true);
+    fetchBaseCR()
+      .then(d=>{ setBaseCRData(d); showToast("✓ Base CR actualizada","ok"); })
+      .catch(()=>showToast("Error al sincronizar Base CR","err",4000))
+      .finally(()=>setBaseCRLoading(false));
+  };
+
+  // Cargar Excel de estación
+  const handleUpload=useCallback(async(estId,file)=>{
+    setUploading(p=>({...p,[estId]:true}));
+    try{
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array",cellDates:true});
+      const cfg=ESTACIONES_CONFIG[estId];
+      const parsed=cfg.parse(wb,cfg);
+      setDataPorEst(p=>({...p,[estId]:parsed}));
+      showToast(`✓ ${cfg.nombre} — ${parsed.despachos.length} despachos, ${fmt(parsed.total)} L`,"ok");
+    }catch(e){
+      console.error(e);
+      showToast(`Error al leer el archivo: ${e.message}`,"err",5000);
+    }finally{
+      setUploading(p=>({...p,[estId]:false}));
+    }
+  },[]);
+
+  // Sincronizar Planta Granel manualmente
+  const handleSyncPlanta=()=>{
+    setPlantaLoading(true);
+    fetchPlantaGranel(stockInicial)
+      .then(d=>{
+        setPlantaData(d);
+        setIngresos(prev=>[
+          ...prev.filter(i=>!i.auto),
+          ...(d.ingresosAuto||[])
+        ]);
+        showToast("✓ Planta Granel actualizada","ok");
+      })
+      .catch(()=>showToast("Error al sincronizar Planta Granel","err",4000))
+      .finally(()=>setPlantaLoading(false));
+  };
+
+  // Totales globales
+  const totales=useMemo(()=>{
+    let totalCap=0,totalStock=0,totalDesp=0;
+    Object.entries(ESTACIONES_CONFIG).forEach(([estId,cfg])=>{
+      const data=estId==="PLANTAGRANEL"?plantaData:dataPorEst[estId];
+      cfg.tanques.forEach(tk=>{
+        totalCap+=tk.cap;
+        let s=0;
+        if(estId==="PLANTAGRANEL" && plantaData?.stockVivo){
+          s=plantaData.stockVivo[tk.id]||0;
+        } else if(estId==="BASECR" && baseCRData?.stockVivo>0){
+          s=baseCRData.stockVivo;
+        } else {
+          const base=(stockInicial?.[estId]?.[tk.id])||0;
+          const ingTotal=ingresos.filter(i=>i.estacion===estId&&i.tanque===tk.id).reduce((a,b)=>a+b.litros,0);
+          const despTotal=(data?.porTanque?.[tk.id])||0;
+          s=Math.max(0,base+ingTotal-despTotal);
+        }
+        totalStock+=s;
+      });
+      totalDesp+=(data?.total)||0;
+    });
+    return{totalCap,totalStock,totalDesp,pct:totalCap>0?(totalStock/totalCap*100):0};
+  },[dataPorEst,ingresos,stockInicial,plantaData]);
+
+  // Consumo por estación para gráfico
+  const consumoPorEst=useMemo(()=>
+    Object.entries(ESTACIONES_CONFIG).map(([id,cfg])=>({
+      id,nombre:cfg.nombre,color:cfg.color,
+      total:(dataPorEst[id]?.total)||0,
+      cap:cfg.tanques.reduce((a,tk)=>a+tk.cap,0),
+    })).sort((a,b)=>b.total-a.total)
+  ,[dataPorEst]);
+
+  const agregarIngreso=()=>{
+    if(!formIng.litros||parseFloat(formIng.litros)<=0){showToast("Ingresá los litros","err");return;}
+    setIngresos(p=>[...p,{...formIng,litros:parseFloat(formIng.litros),id:Date.now()}]);
+    showToast(`✓ Ingreso registrado — ${fmt(formIng.litros)} L a ${ESTACIONES_CONFIG[formIng.estacion].nombre}`);
+    setModalIngreso(false);
+    setFormIng(p=>({...p,litros:"",obs:""}));
+  };
+
+  const inpStyle={background:"#f8fafc",border:"1.5px solid #e2e8f0",borderRadius:7,color:"#1e293b",padding:"9px 12px",fontSize:13,fontFamily:"'DM Sans'",width:"100%"};
+  const lblStyle={fontSize:10,color:"#64748b",letterSpacing:1.5,marginBottom:5,display:"block",fontFamily:"'DM Mono'",textTransform:"uppercase"};
+
+  return(
+    <div style={{fontFamily:"'DM Sans'",background:"#f2f4f7",minHeight:"100vh",position:"relative",zIndex:1}}>
+
+      {/* TOAST */}
+      {toast.msg&&(
+        <div style={{position:"fixed",bottom:24,right:24,background:toast.type==="ok"?"#f0fdf4":toast.type==="err"?"#fef2f2":"#eff6ff",border:`1px solid ${toast.type==="ok"?"#86efac":toast.type==="err"?"#fca5a5":"#93c5fd"}`,color:toast.type==="ok"?"#16a34a":toast.type==="err"?"#dc2626":"#1d4ed8",padding:"12px 20px",borderRadius:10,fontFamily:"'DM Mono'",fontSize:13,fontWeight:500,boxShadow:"0 4px 20px rgba(0,0,0,.12)",zIndex:9999,maxWidth:380}}>
+          {toast.msg}
+        </div>
+      )}
+
+      {/* INGRESO MODAL */}
+      {modalIngreso&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}} onClick={e=>{if(e.target===e.currentTarget)setModalIngreso(false);}}>
+          <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:16,padding:28,width:380,boxShadow:"0 20px 60px rgba(0,0,0,.2)"}}>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,letterSpacing:2,color:"#1e293b",marginBottom:20}}>Registrar Ingreso</div>
+            <div style={{display:"grid",gap:14}}>
+              <div>
+                <label style={lblStyle}>Estación</label>
+                <select style={inpStyle} value={formIng.estacion} onChange={e=>{const est=e.target.value;setFormIng(p=>({...p,estacion:est,tanque:ESTACIONES_CONFIG[est].tanques[0].id}));}}>
+                  {Object.values(ESTACIONES_CONFIG).map(c=><option key={c.id} value={c.id}>{c.nombre}</option>)}
+                </select>
+              </div>
+              {ESTACIONES_CONFIG[formIng.estacion].tanques.length>1&&(
+                <div>
+                  <label style={lblStyle}>Tanque</label>
+                  <select style={inpStyle} value={formIng.tanque} onChange={e=>setFormIng(p=>({...p,tanque:e.target.value}))}>
+                    {ESTACIONES_CONFIG[formIng.estacion].tanques.map(tk=><option key={tk.id} value={tk.id}>{tk.nombre}</option>)}
+                  </select>
+                </div>
+              )}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div>
+                  <label style={lblStyle}>Litros</label>
+                  <input style={inpStyle} type="number" placeholder="0" value={formIng.litros} onChange={e=>setFormIng(p=>({...p,litros:e.target.value}))}/>
+                </div>
+                <div>
+                  <label style={lblStyle}>Fecha</label>
+                  <input style={inpStyle} type="date" value={formIng.fecha} onChange={e=>setFormIng(p=>({...p,fecha:e.target.value}))}/>
+                </div>
+              </div>
+              <div>
+                <label style={lblStyle}>Observación (opcional)</label>
+                <input style={inpStyle} placeholder="Ej: RTO 12345" value={formIng.obs} onChange={e=>setFormIng(p=>({...p,obs:e.target.value}))}/>
+              </div>
+              <div style={{display:"flex",gap:10,marginTop:4}}>
+                <button onClick={agregarIngreso} style={{flex:1,background:"#16a34a",border:"none",borderRadius:8,color:"#fff",fontFamily:"'DM Mono'",fontSize:12,letterSpacing:1,padding:"11px 0",cursor:"pointer",textTransform:"uppercase"}}>
+                  ✓ Registrar
+                </button>
+                <button onClick={()=>setModalIngreso(false)} style={{background:"transparent",border:"1px solid #e2e8f0",borderRadius:8,color:"#64748b",fontFamily:"'DM Mono'",fontSize:12,padding:"11px 18px",cursor:"pointer"}}>✕</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* HEADER */}
+      <div style={{borderBottom:"1px solid #e2e8f0",background:"#ffffffee",backdropFilter:"blur(10px)",position:"sticky",top:0,zIndex:100}}>
+        <div style={{maxWidth:1400,margin:"0 auto",padding:"0 28px",display:"flex",alignItems:"center",gap:0,minHeight:58}}>
+          <div style={{marginRight:32,paddingRight:32,borderRight:"1px solid #e2e8f0"}}>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:24,letterSpacing:3,background:"linear-gradient(90deg,#e87030,#f0a060)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",lineHeight:1}}>⛽ RED PETROSAR</div>
+            <div style={{fontSize:9,color:"#94a3b8",letterSpacing:3,fontFamily:"'DM Mono'",textTransform:"uppercase"}}>Control de Estaciones</div>
+          </div>
+
+          {/* mini gauges */}
+          <div style={{display:"flex",gap:24,flex:1,alignItems:"center",flexWrap:"wrap"}}>
+            {Object.values(ESTACIONES_CONFIG).map(cfg=>{
+              const data=dataPorEst[cfg.id];
+              const totalCap=cfg.tanques.reduce((a,tk)=>a+tk.cap,0);
+              const stock=cfg.id==="PLANTAGRANEL"&&plantaData?.stockVivo
+                ?Object.values(plantaData.stockVivo).reduce((a,b)=>a+b,0)
+                :cfg.id==="BASECR"&&baseCRData?.stockVivo>0
+                ?baseCRData.stockVivo
+                :Math.max(0,cfg.tanques.reduce((a,tk)=>{
+                  const base=(stockInicial?.[cfg.id]?.[tk.id])||0;
+                  const ing=ingresos.filter(i=>i.estacion===cfg.id&&i.tanque===tk.id).reduce((s,b)=>s+b.litros,0);
+                  const desp=(data?.porTanque?.[tk.id])||0;
+                  return a+Math.max(0,base+ing-desp);
+                },0));
+              const pct=totalCap>0?Math.min(100,(stock/totalCap)*100):0;
+              const c=pct>60?cfg.color:pct>25?"#d49010":"#e03030";
+              return(
+                <div key={cfg.id} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                  <div style={{fontSize:9,color:"#94a3b8",letterSpacing:1.5,fontFamily:"'DM Mono'",textTransform:"uppercase"}}>{cfg.nombre.split(" ")[0]}</div>
+                  <div style={{width:50,height:3,background:"#e2e8f0",borderRadius:2}}>
+                    <div style={{width:`${pct}%`,height:"100%",background:c,borderRadius:2,transition:"width .8s"}}/>
+                  </div>
+                  <div style={{fontFamily:"'DM Mono'",fontSize:11,color:c,fontWeight:600}}>{fmt(stock)}</div>
+                </div>
+              );
+            })}
+
+            <div style={{width:1,height:30,background:"#e2e8f0",margin:"0 4px"}}/>
+            <div>
+              <div style={{fontSize:9,color:"#94a3b8",letterSpacing:1.5,fontFamily:"'DM Mono'"}}>TOTAL RED</div>
+              <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"#e87030",letterSpacing:1,lineHeight:1}}>{fmt(totales.totalStock)} L</div>
+            </div>
+          </div>
+
+          {/* actions */}
+          <div style={{display:"flex",gap:8,alignItems:"center",marginLeft:16}}>
+            <button onClick={()=>setModalIngreso(true)} style={{background:"#16a34a",border:"none",borderRadius:8,color:"#fff",fontFamily:"'DM Mono'",fontSize:11,letterSpacing:1,padding:"8px 14px",cursor:"pointer",textTransform:"uppercase",whiteSpace:"nowrap"}}>
+              + Ingreso
+            </button>
+          </div>
+
+          {/* tabs */}
+          <div style={{display:"flex",marginLeft:20,borderLeft:"1px solid #e2e8f0",paddingLeft:16,gap:2}}>
+            {[["dashboard","Dashboard"],["despachos","Despachos"],["ingresos","Ingresos"],["alarmas","🔔 Alarmas"],["config","Config"]].map(([k,label])=>(
+              <button key={k} onClick={()=>setTab(k)} style={{background:tab===k?"#f1f5f9":"transparent",border:"none",borderRadius:6,color:tab===k?"#1e293b":"#94a3b8",fontFamily:"'DM Mono'",fontSize:11,letterSpacing:.5,padding:"7px 11px",cursor:"pointer",textTransform:"uppercase",transition:"all .15s",fontWeight:tab===k?600:400}}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* BODY */}
+      <div style={{maxWidth:1400,margin:"0 auto",padding:"28px 28px"}}>
+
+        {/* ── DASHBOARD ── */}
+        {tab==="dashboard"&&(
+          <div>
+            {/* Resumen global */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:28}}>
+              {[
+                {label:"Stock total red",val:fmt(totales.totalStock)+" L",sub:`${totales.pct.toFixed(0)}% capacidad`,color:"#e87030"},
+                {label:"Capacidad total",val:fmt(totales.totalCap)+" L",sub:"todas las estaciones",color:"#3a8fd4"},
+                {label:"Despachos período",val:fmt(totales.totalDesp)+" L",sub:"archivos cargados",color:"#16a34a"},
+                {label:"Estaciones activas",val:Object.keys(dataPorEst).length+"/"+Object.keys(ESTACIONES_CONFIG).length,sub:"con datos",color:"#a060e0"},
+              ].map((item,i)=>(
+                <div key={item.label} className="fu" style={{animationDelay:`${i*0.07}s`,background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:"16px 20px",borderTop:`3px solid ${item.color}`}}>
+                  <div style={{fontSize:10,color:"#94a3b8",letterSpacing:1.5,fontFamily:"'DM Mono'",textTransform:"uppercase",marginBottom:8}}>{item.label}</div>
+                  <div style={{fontFamily:"'Bebas Neue'",fontSize:28,color:item.color,letterSpacing:1,lineHeight:1}}>{item.val}</div>
+                  <div style={{fontSize:11,color:"#cbd5e1",marginTop:4}}>{item.sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Cards de estaciones */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))",gap:16}}>
+              {Object.keys(ESTACIONES_CONFIG).map((estId,i)=>(
+                <EstacionCard key={estId} est={estId} data={estId==="PLANTAGRANEL"?plantaData:dataPorEst[estId]} ingresos={ingresos} stockInicial={stockInicial} onUpload={handleUpload} uploading={uploading[estId]} idx={i} plantaData={plantaData} onSyncPlanta={handleSyncPlanta} plantaLoading={plantaLoading} alarmas={alarmas} baseCRData={baseCRData} onSyncBaseCR={handleSyncBaseCR} baseCRLoading={baseCRLoading}/>
+              ))}
+            </div>
+
+            {/* Gráfico de barras consumo */}
+            {consumoPorEst.some(e=>e.total>0)&&(
+              <div style={{marginTop:24,background:"#fff",border:"1px solid #e2e8f0",borderRadius:14,padding:"20px 24px",boxShadow:"0 1px 6px rgba(0,0,0,.05)"}}>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:18,letterSpacing:2,color:"#1e293b",marginBottom:18}}>Despachos del período por estación</div>
+                <div style={{display:"flex",gap:12,alignItems:"flex-end",height:100}}>
+                  {consumoPorEst.map(est=>{
+                    const maxDesp=Math.max(...consumoPorEst.map(e=>e.total),1);
+                    const h=(est.total/maxDesp)*100;
+                    return(
+                      <div key={est.id} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                        <div style={{fontFamily:"'DM Mono'",fontSize:10,color:est.color,fontWeight:600}}>{fmt(est.total)}</div>
+                        <div style={{width:"100%",height:`${h}%`,background:`linear-gradient(180deg,${est.color},${est.color}66)`,borderRadius:"4px 4px 0 0",minHeight:4,transition:"height .8s cubic-bezier(.4,0,.2,1)"}}/>
+                        <div style={{fontFamily:"'DM Mono'",fontSize:9,color:"#94a3b8",letterSpacing:1,textAlign:"center"}}>{est.nombre.split(" ")[0]}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── DESPACHOS ── */}
+        {tab==="despachos"&&(
+          <div>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,letterSpacing:2,color:"#1e293b",marginBottom:20}}>Detalle de Despachos</div>
+            {Object.entries(ESTACIONES_CONFIG).map(([estId,cfg])=>{
+              const data=dataPorEst[estId];
+              if(!data) return null;
+              return(
+                <div key={estId} style={{marginBottom:24,background:"#fff",border:`1.5px solid ${cfg.color}44`,borderRadius:14,overflow:"hidden",boxShadow:"0 1px 6px rgba(0,0,0,.06)"}}>
+                  <div style={{padding:"14px 20px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:cfg.color}}/>
+                      <span style={{fontFamily:"'Bebas Neue'",fontSize:18,letterSpacing:2,color:"#1e293b"}}>{cfg.nombre}</span>
+                      <span style={{background:`${cfg.color}18`,color:cfg.color,fontSize:10,padding:"2px 8px",borderRadius:3,fontFamily:"'DM Mono'"}}>{cfg.sistema}</span>
+                    </div>
+                    <span style={{fontFamily:"'DM Mono'",fontSize:12,color:cfg.color,fontWeight:600}}>{data.despachos.length} ops · {fmt(data.total)} L</span>
+                  </div>
+                  <div style={{overflowX:"auto",maxHeight:300,overflowY:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead style={{position:"sticky",top:0}}>
+                        <tr style={{background:"#f8fafc"}}>
+                          {["Fecha","Hora","Litros","Operación","Patente","Chofer/Equipo"].map(h=>(
+                            <th key={h} style={{padding:"8px 14px",textAlign:h==="Litros"?"right":"left",fontFamily:"'DM Mono'",fontSize:9,fontWeight:600,color:"#94a3b8",letterSpacing:1.5,textTransform:"uppercase",borderBottom:"1px solid #f1f5f9",whiteSpace:"nowrap"}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.despachos.slice(0,100).map((d,i)=>(
+                          <tr key={i} style={{borderBottom:"1px solid #f8fafc",background:i%2===0?"#fff":"#f8fafc"}}>
+                            <td style={{padding:"7px 14px",fontFamily:"'DM Mono'",fontSize:11,color:"#64748b",whiteSpace:"nowrap"}}>{d.fecha}</td>
+                            <td style={{padding:"7px 14px",fontFamily:"'DM Mono'",fontSize:11,color:"#94a3b8"}}>{d.hora}</td>
+                            <td style={{padding:"7px 14px",fontFamily:"'DM Mono'",fontSize:12,color:cfg.color,textAlign:"right",fontWeight:600}}>{fmtD(d.litros)}</td>
+                            <td style={{padding:"7px 14px",fontFamily:"'DM Mono'",fontSize:11,color:"#475569"}}>{d.operacion}</td>
+                            <td style={{padding:"7px 14px",fontFamily:"'DM Mono'",fontSize:11,color:"#64748b"}}>{d.patente||"—"}</td>
+                            <td style={{padding:"7px 14px",fontSize:11,color:"#64748b",maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.chofer||d.cliente||"—"}</td>
+                          </tr>
+                        ))}
+                        {data.despachos.length>100&&(
+                          <tr><td colSpan={6} style={{padding:"10px 14px",textAlign:"center",color:"#94a3b8",fontFamily:"'DM Mono'",fontSize:11}}>... {data.despachos.length-100} registros más</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+            {!Object.keys(dataPorEst).length&&(
+              <div style={{textAlign:"center",padding:"60px 0",color:"#94a3b8",fontFamily:"'DM Mono'",fontSize:13}}>
+                Cargá los Excel de las estaciones en el Dashboard para ver los despachos
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── INGRESOS ── */}
+        {tab==="ingresos"&&(
+          <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+              <div style={{fontFamily:"'Bebas Neue'",fontSize:22,letterSpacing:2,color:"#1e293b"}}>Ingresos Registrados</div>
+              <button onClick={()=>setModalIngreso(true)} style={{background:"#16a34a",border:"none",borderRadius:8,color:"#fff",fontFamily:"'DM Mono'",fontSize:11,letterSpacing:1,padding:"9px 16px",cursor:"pointer",textTransform:"uppercase"}}>
+                + Nuevo ingreso
+              </button>
+            </div>
+            {ingresos.length===0?(
+              <div style={{textAlign:"center",padding:"60px 0",color:"#94a3b8",fontFamily:"'DM Mono'",fontSize:13,background:"#fff",borderRadius:14,border:"1px solid #e2e8f0"}}>
+                Sin ingresos registrados.<br/>
+                <span style={{fontSize:11,color:"#cbd5e1"}}>Los ingresos se cargan manualmente cuando recibís combustible desde la planta.</span>
+              </div>
+            ):(
+              <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:14,overflow:"hidden"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                  <thead>
+                    <tr style={{background:"#f8fafc"}}>
+                      {["Fecha","Estación","Tanque","Litros","Observación"].map(h=>(
+                        <th key={h} style={{padding:"10px 16px",textAlign:h==="Litros"?"right":"left",fontFamily:"'DM Mono'",fontSize:9,color:"#94a3b8",letterSpacing:1.5,textTransform:"uppercase",borderBottom:"1px solid #f1f5f9"}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...ingresos].reverse().map((ing,i)=>{
+                      const cfg=ESTACIONES_CONFIG[ing.estacion];
+                      const tk=cfg?.tanques.find(t=>t.id===ing.tanque);
+                      return(
+                        <tr key={ing.id} style={{borderBottom:"1px solid #f8fafc"}}>
+                          <td style={{padding:"10px 16px",fontFamily:"'DM Mono'",fontSize:12,color:"#64748b"}}>{ing.fecha}</td>
+                          <td style={{padding:"10px 16px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <div style={{width:6,height:6,borderRadius:"50%",background:cfg?.color||"#888"}}/>
+                              <span style={{fontWeight:500,color:"#1e293b"}}>{cfg?.nombre||ing.estacion}</span>
+                            </div>
+                          </td>
+                          <td style={{padding:"10px 16px",fontFamily:"'DM Mono'",fontSize:11,color:"#64748b"}}>{tk?.nombre||ing.tanque}</td>
+                          <td style={{padding:"10px 16px",fontFamily:"'DM Mono'",fontSize:14,color:"#16a34a",textAlign:"right",fontWeight:600}}>+{fmt(ing.litros)} L</td>
+                          <td style={{padding:"10px 16px",fontSize:12,color:"#64748b"}}>{ing.obs||"—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── ALARMAS ── */}
+        {tab==="alarmas"&&(
+          <div>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,letterSpacing:2,color:"#1e293b",marginBottom:8}}>Alarmas de Stock Mínimo</div>
+            <div style={{fontSize:12,color:"#64748b",marginBottom:24,fontFamily:"'DM Mono'"}}>
+              Configurá el umbral mínimo en litros para cada tanque. Cuando el stock baje de ese valor, el tanque mostrará una alerta roja.
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:16}}>
+              {Object.entries(ESTACIONES_CONFIG).map(([estId,cfg])=>(
+                <div key={estId} style={{background:"#fff",border:`1.5px solid ${cfg.color}44`,borderRadius:14,overflow:"hidden",boxShadow:"0 1px 6px rgba(0,0,0,.06)"}}>
+                  <div style={{height:3,background:`linear-gradient(90deg,${cfg.color},${cfg.color}44)`}}/>
+                  <div style={{padding:"14px 20px 10px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:8,height:8,borderRadius:"50%",background:cfg.color}}/>
+                    <span style={{fontFamily:"'Bebas Neue'",fontSize:18,letterSpacing:2,color:"#1e293b"}}>{cfg.nombre}</span>
+                    <span style={{background:`${cfg.color}18`,color:cfg.color,fontSize:9,padding:"2px 7px",borderRadius:3,fontFamily:"'DM Mono'",marginLeft:4}}>{cfg.sistema}</span>
+                  </div>
+                  <div style={{padding:"16px 20px"}}>
+                    {cfg.tanques.map((tk,i)=>{
+                      const umbral=(alarmas?.[estId]?.[tk.id])||0;
+                      return(
+                        <div key={tk.id} style={{marginBottom:i<cfg.tanques.length-1?16:0}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                            <label style={{fontFamily:"'DM Mono'",fontSize:10,color:"#64748b",letterSpacing:1.5,textTransform:"uppercase"}}>{tk.nombre}</label>
+                            <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#94a3b8"}}>cap. {fmt(tk.cap)} L</span>
+                          </div>
+                          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                            <input
+                              type="number"
+                              placeholder="0 = sin alarma"
+                              value={umbral||""}
+                              onChange={e=>{
+                                const v=parseFloat(e.target.value)||0;
+                                setAlarmas(p=>({...p,[estId]:{...p[estId],[tk.id]:v}}));
+                              }}
+                              style={{flex:1,background:"#f8fafc",border:"1.5px solid #e2e8f0",borderRadius:7,color:"#1e293b",padding:"9px 12px",fontSize:14,fontFamily:"'DM Mono'",fontWeight:500}}
+                            />
+                            <span style={{fontSize:11,color:"#94a3b8",whiteSpace:"nowrap"}}>L mín.</span>
+                          </div>
+                          {umbral>0&&<div style={{marginTop:6,fontSize:10,color:"#e87030",fontFamily:"'DM Mono'"}}>
+                            🔔 Alerta si stock &lt; {fmt(umbral)} L
+                          </div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Resumen de alarmas activas */}
+            {Object.entries(ESTACIONES_CONFIG).some(([estId,cfg])=>
+              cfg.tanques.some(tk=>{
+                const umbral=(alarmas?.[estId]?.[tk.id])||0;
+                if(!umbral) return false;
+                const data=dataPorEst[estId];
+                const base=(stockInicial?.[estId]?.[tk.id])||0;
+                const ing=ingresos.filter(i=>i.estacion===estId&&i.tanque===tk.id).reduce((a,b)=>a+b.litros,0);
+                const desp=(data?.porTanque?.[tk.id])||0;
+                const stock=estId==="PLANTAGRANEL"&&plantaData?.stockVivo?plantaData.stockVivo[tk.id]||0:Math.max(0,base+ing-desp);
+                return stock<=umbral;
+              })
+            )&&(
+              <div style={{marginTop:20,background:"#fff5f5",border:"1.5px solid #fca5a5",borderRadius:12,padding:"16px 20px"}}>
+                <div style={{fontFamily:"'DM Mono'",fontSize:11,color:"#dc2626",letterSpacing:1.5,textTransform:"uppercase",marginBottom:12,fontWeight:700}}>⚠ Alarmas Activas</div>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {Object.entries(ESTACIONES_CONFIG).flatMap(([estId,cfg])=>
+                    cfg.tanques.map(tk=>{
+                      const umbral=(alarmas?.[estId]?.[tk.id])||0;
+                      if(!umbral) return null;
+                      const data=dataPorEst[estId];
+                      const base=(stockInicial?.[estId]?.[tk.id])||0;
+                      const ing=ingresos.filter(i=>i.estacion===estId&&i.tanque===tk.id).reduce((a,b)=>a+b.litros,0);
+                      const desp=(data?.porTanque?.[tk.id])||0;
+                      const stock=estId==="PLANTAGRANEL"&&plantaData?.stockVivo?plantaData.stockVivo[tk.id]||0:Math.max(0,base+ing-desp);
+                      if(stock>umbral) return null;
+                      return(
+                        <div key={estId+tk.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",border:"1px solid #fca5a5",borderRadius:8,padding:"10px 14px"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <div style={{width:6,height:6,borderRadius:"50%",background:cfg.color}}/>
+                            <span style={{fontWeight:600,color:"#1e293b",fontFamily:"'DM Sans'"}}>{cfg.nombre}</span>
+                            <span style={{fontSize:11,color:"#64748b",fontFamily:"'DM Mono'"}}>{tk.nombre}</span>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <span style={{fontFamily:"'DM Mono'",fontSize:14,color:"#dc2626",fontWeight:700}}>{fmt(Math.round(stock))} L</span>
+                            <span style={{fontSize:10,color:"#94a3b8",fontFamily:"'DM Mono'",marginLeft:6}}>/ umbral {fmt(umbral)} L</span>
+                          </div>
+                        </div>
+                      );
+                    }).filter(Boolean)
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── CONFIG ── */}
+        {tab==="config"&&(
+          <div>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,letterSpacing:2,color:"#1e293b",marginBottom:8}}>Stock Inicial por Estación</div>
+            <div style={{fontSize:12,color:"#64748b",marginBottom:24,fontFamily:"'DM Mono'"}}>
+              Cargá los litros que tiene cada tanque al momento de inicio. La app descuenta los despachos automáticamente.
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:16}}>
+              {Object.entries(ESTACIONES_CONFIG).map(([estId,cfg])=>(
+                <div key={estId} style={{background:"#fff",border:`1.5px solid ${cfg.color}44`,borderRadius:14,overflow:"hidden",boxShadow:"0 1px 6px rgba(0,0,0,.06)"}}>
+                  <div style={{height:3,background:`linear-gradient(90deg,${cfg.color},${cfg.color}44)`}}/>
+                  <div style={{padding:"16px 20px 8px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:8,height:8,borderRadius:"50%",background:cfg.color}}/>
+                    <span style={{fontFamily:"'Bebas Neue'",fontSize:18,letterSpacing:2,color:"#1e293b"}}>{cfg.nombre}</span>
+                    <span style={{background:`${cfg.color}18`,color:cfg.color,fontSize:9,padding:"2px 7px",borderRadius:3,fontFamily:"'DM Mono'",marginLeft:4}}>{cfg.sistema}</span>
+                  </div>
+                  <div style={{padding:"16px 20px"}}>
+                    {cfg.tanques.map((tk,i)=>{
+                      const val=(stockInicial?.[estId]?.[tk.id])||0;
+                      const pct=tk.cap>0?Math.min(100,(val/tk.cap)*100):0;
+                      const c=pct>60?cfg.color:pct>25?"#d49010":"#e03030";
+                      return(
+                        <div key={tk.id} style={{marginBottom:i<cfg.tanques.length-1?16:0}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                            <label style={{fontFamily:"'DM Mono'",fontSize:10,color:"#64748b",letterSpacing:1.5,textTransform:"uppercase"}}>{tk.nombre} — cap. {(tk.cap/1000).toFixed(0)}k L</label>
+                            <span style={{fontFamily:"'DM Mono'",fontSize:11,color:c}}>{pct.toFixed(0)}%</span>
+                          </div>
+                          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                            {estId==="PLANTAGRANEL"?(
+                              <div style={{flex:1,background:"#f8fafc",border:`1px solid ${cfg.color}22`,borderRadius:6,color:cfg.color,padding:"9px 12px",fontSize:14,fontFamily:"'DM Mono'",fontWeight:500}}>
+                                {fmt(plantaData?.stockVivo?.[tk.id]||val)} L — desde Sheets
+                              </div>
+                            ):(
+                              <input
+                                type="number"
+                                placeholder="0"
+                                value={val||""}
+                                onChange={e=>{
+                                  const v=parseFloat(e.target.value)||0;
+                                  setStockInicial(p=>({...p,[estId]:{...p[estId],[tk.id]:v}}));
+                                }}
+                                style={{flex:1,background:"#f8fafc",border:`1.5px solid ${cfg.color}44`,borderRadius:6,color:"#1e293b",padding:"9px 12px",fontSize:14,fontFamily:"'DM Mono'",fontWeight:500}}
+                              />
+                            )}
+                            <span style={{fontSize:11,color:"#94a3b8",whiteSpace:"nowrap"}}>/ {(tk.cap/1000).toFixed(0)}k L</span>
+                          </div>
+                          <div style={{height:4,background:"#f1f5f9",borderRadius:2,marginTop:8}}>
+                            <div style={{width:`${pct}%`,height:"100%",background:c,borderRadius:2,transition:"width .4s"}}/>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{padding:"10px 20px",borderTop:"1px solid #f1f5f9",background:"#f8fafc"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <span style={{fontFamily:"'DM Mono'",fontSize:10,color:"#94a3b8"}}>TOTAL CARGADO</span>
+                      <span style={{fontFamily:"'DM Mono'",fontSize:13,color:cfg.color,fontWeight:600}}>
+                        {fmt(cfg.tanques.reduce((a,tk)=>a+((stockInicial?.[estId]?.[tk.id])||0),0))} L
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Resumen */}
+            <div style={{marginTop:20,background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:"16px 20px",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}>
+              <div style={{fontFamily:"'DM Mono'",fontSize:10,color:"#94a3b8",letterSpacing:1.5,textTransform:"uppercase",marginBottom:12}}>Resumen de stock inicial cargado</div>
+              <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                {Object.entries(ESTACIONES_CONFIG).map(([estId,cfg])=>{
+                  const total=cfg.tanques.reduce((a,tk)=>a+((stockInicial?.[estId]?.[tk.id])||0),0);
+                  const cap=cfg.tanques.reduce((a,tk)=>a+tk.cap,0);
+                  const pct=cap>0?(total/cap*100):0;
+                  return(
+                    <div key={estId} style={{flex:1,minWidth:140,textAlign:"center"}}>
+                      <div style={{fontSize:9,color:"#94a3b8",fontFamily:"'DM Mono'",letterSpacing:1,marginBottom:4}}>{cfg.nombre.toUpperCase()}</div>
+                      <div style={{fontFamily:"'Bebas Neue'",fontSize:24,color:pct>60?cfg.color:pct>25?"#d49010":"#e03030",lineHeight:1}}>{fmt(total)}</div>
+                      <div style={{fontSize:10,color:"#94a3b8"}}>{pct.toFixed(0)}% de {fmt(cap)} L</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
